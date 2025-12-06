@@ -1,8 +1,8 @@
 const express = require('express');
+const serverless = require('serverless-http');
 const { generateHandler } = require('./handlers/generate');
 const { healthHandler } = require('./handlers/health');
 const aiService = require('./services/ai');
-const storageService = require('./services/storage');
 const config = require('./config');
 
 const app = express();
@@ -112,49 +112,26 @@ app.get('/pricing', (req, res) => {
 // Ruta protegida con x402
 app.post('/generate', generateHandler);
 
-// Endpoint para historial de usuario (por wallet)
-app.get('/history/:walletAddress', async (req, res) => {
-  try {
-    const { walletAddress } = req.params;
-    const limit = parseInt(req.query.limit) || 50;
-
-    const transactions = await storageService.getTransactionsByWallet(walletAddress, limit);
-    const stats = await storageService.getUserStats(walletAddress);
-
-    res.json({
-      success: true,
-      wallet: walletAddress,
-      stats,
-      transactions
-    });
-  } catch (error) {
-    console.error('[History] Error:', error);
-    res.status(500).json({ error: 'Error fetching history' });
-  }
-});
-
 // Inicializar x402 middleware
 setupX402Middleware();
 
-// Conectar a MongoDB al iniciar
-storageService.connectDB().catch(err => {
-  console.error('Failed to connect to MongoDB:', err.message);
-});
+// Export para Lambda (si se usa en AWS)
+module.exports.handler = serverless(app);
 
-// Export app para tests
+// Export app
 module.exports.app = app;
 
-// Iniciar servidor si se ejecuta directamente (Railway, Docker, etc.)
-if (require.main === module) {
+// Iniciar servidor solo si NO estamos en Lambda
+// Lambda define AWS_LAMBDA_FUNCTION_NAME
+if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`UltraPay Backend running on port ${PORT}`);
-    console.log(`Environment: ${config.server.nodeEnv}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log('Endpoints:');
-    console.log('  GET  /health              - Health check');
-    console.log('  GET  /providers           - List AI providers');
-    console.log('  GET  /pricing             - Get pricing info');
-    console.log('  GET  /history/:wallet     - Get user history');
-    console.log('  POST /generate            - Generate image/video (requires x402 payment)');
+    console.log('  GET  /health    - Health check');
+    console.log('  GET  /providers - List AI providers');
+    console.log('  GET  /pricing   - Get pricing info');
+    console.log('  POST /generate  - Generate image/video (requires x402 payment)');
   });
 }

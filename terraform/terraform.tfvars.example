@@ -1,6 +1,6 @@
 aws_region           = "us-east-1"
 project_name         = "ultrapay"
 environment          = "dev"
-lambda_zip_path      = "../dist.zip"
 x402_facilitator_url = "https://facilitator.ultravioletadao.xyz/"
 x402_wallet_address  = "0x34033041a5944B8F10f8E4D8496Bfb84f1A293A8"
+x402_network         = "base-sepolia"

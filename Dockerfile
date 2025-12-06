@@ -1,25 +1,26 @@
-# Dockerfile para UltraPay Backend - Railway deployment
-FROM node:20-alpine AS base
+FROM node:20-alpine
 
 WORKDIR /app
 
-# Instalar dumb-init para manejo correcto de señales
-RUN apk add --no-cache dumb-init
+# Copiar package files
+COPY package.json package-lock.json ./
 
-# Copiar archivos de dependencias
-COPY package.json package-lock.json* ./
+# Instalar dependencias de producción
+RUN npm ci --only=production
 
-# Instalar solo dependencias de produccion
-RUN npm ci --only=production && npm cache clean --force
-
-# Copiar codigo fuente
+# Copiar código fuente
 COPY src/ ./src/
 
-# Usuario no-root para seguridad
-USER node
+# Variables de entorno por defecto (Railway las sobreescribe)
+ENV NODE_ENV=production
+ENV PORT=3001
 
-# Puerto que Railway asignara via variable de entorno
+# Puerto (Railway lo asigna automáticamente via $PORT)
 EXPOSE 3001
 
-# Usar dumb-init como PID 1 para manejo correcto de señales
-CMD ["dumb-init", "node", "src/index.js"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
+
+# Iniciar servidor
+CMD ["node", "src/index.js"]

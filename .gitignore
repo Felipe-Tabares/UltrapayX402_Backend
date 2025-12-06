@@ -7,10 +7,11 @@ node_modules/
 .env.*.local
 .env.production
 
-# Build
+# Build & Artifacts
 dist/
 dist.zip
 *.zip
+layer/
 
 # Terraform
 terraform/.terraform/
@@ -19,6 +20,7 @@ terraform/*.tfstate.backup
 terraform/.terraform.lock.hcl
 terraform/terraform.tfvars
 terraform/*.auto.tfvars
+terraform/.terraform.tfstate.lock.info
 
 # AWS
 .aws/
@@ -33,6 +35,7 @@ terraform/*.auto.tfvars
 .DS_Store
 Thumbs.db
 desktop.ini
+nul
 
 # Logs
 *.log

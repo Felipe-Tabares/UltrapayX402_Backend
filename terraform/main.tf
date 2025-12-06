@@ -12,46 +12,15 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Build Lambda package: npm install + zip
-resource "null_resource" "lambda_build" {
-  triggers = {
-    # Re-build cuando cambie package.json
-    package_hash = filesha256("${path.module}/../package.json")
+# ECR Repository para la imagen Docker
+resource "aws_ecr_repository" "lambda" {
+  name                 = "${var.project_name}-api-${var.environment}"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = false
   }
-
-  provisioner "local-exec" {
-    command     = "npm install --production --omit=dev"
-    working_dir = "${path.module}/.."
-  }
-}
-
-# Crear zip del directorio completo (mas eficiente)
-data "archive_file" "lambda_zip" {
-  type        = "zip"
-  source_dir  = "${path.module}/.."
-  output_path = "${path.module}/../dist.zip"
-
-  excludes = [
-    "terraform",
-    "terraform/*",
-    "terraform/**/*",
-    ".git",
-    ".git/*",
-    ".git/**/*",
-    ".gitignore",
-    "README.md",
-    "CLAUDE.md",
-    "*.md",
-    ".env",
-    ".env.*",
-    "dist.zip",
-    "tests",
-    "tests/*",
-    "test",
-    "test/*"
-  ]
-
-  depends_on = [null_resource.lambda_build]
 }
 
 # S3 Bucket para almacenar imágenes/videos generados
@@ -99,19 +68,23 @@ resource "aws_iam_role" "lambda_role" {
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
       }
-    ]
+    }]
   })
 }
 
-# IAM Policy para Lambda (S3 + DynamoDB + CloudWatch)
+# Política para logs de CloudWatch
+resource "aws_iam_role_policy_attachment" "lambda_logs" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Política adicional para S3 y DynamoDB
 resource "aws_iam_role_policy" "lambda_policy" {
   name = "${var.project_name}-lambda-policy-${var.environment}"
   role = aws_iam_role.lambda_role.id
@@ -135,41 +108,84 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "dynamodb:Query"
         ]
         Resource = aws_dynamodb_table.transactions.arn
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "arn:aws:logs:*:*:*"
       }
     ]
   })
 }
 
-# Lambda Function
+# Build y push de la imagen Docker
+resource "null_resource" "docker_build" {
+  triggers = {
+    dockerfile = filemd5("${path.module}/../Dockerfile")
+    source_hash = sha256(join("", [
+      file("${path.module}/../src/index.js"),
+      file("${path.module}/../src/config/index.js"),
+      file("${path.module}/../src/handlers/generate.js"),
+      file("${path.module}/../src/handlers/health.js"),
+      file("${path.module}/../src/services/ai.js"),
+      file("${path.module}/../src/services/storage.js"),
+      file("${path.module}/../package.json")
+    ]))
+  }
+
+  provisioner "local-exec" {
+    working_dir = "${path.module}/.."
+    command     = <<EOT
+      $ErrorActionPreference = 'Stop'
+
+      Write-Host "========== BUILD DOCKER IMAGE =========="
+
+      # Login a ECR
+      Write-Host "Login a ECR..."
+      aws ecr get-login-password --region ${var.aws_region} | docker login --username AWS --password-stdin ${aws_ecr_repository.lambda.repository_url}
+
+      # Build
+      Write-Host "Building Docker image..."
+      docker build -t ${aws_ecr_repository.lambda.repository_url}:latest .
+
+      # Push
+      Write-Host "Pushing to ECR..."
+      docker push ${aws_ecr_repository.lambda.repository_url}:latest
+
+      Write-Host "========== DOCKER BUILD COMPLETADO =========="
+    EOT
+    interpreter = ["powershell", "-Command"]
+  }
+
+  depends_on = [aws_ecr_repository.lambda]
+}
+
+# Esperar después del build
+resource "time_sleep" "wait_for_docker" {
+  depends_on      = [null_resource.docker_build]
+  create_duration = "10s"
+}
+
+# Función Lambda (Container Image)
 resource "aws_lambda_function" "api" {
-  filename         = data.archive_file.lambda_zip.output_path
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-  function_name    = "${var.project_name}-api-${var.environment}"
-  role             = aws_iam_role.lambda_role.arn
-  handler          = "src/index.handler"
-  runtime          = "nodejs20.x"
-  timeout          = 120
-  memory_size      = 512
+  function_name = "${var.project_name}-api-${var.environment}"
+  role          = aws_iam_role.lambda_role.arn
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.lambda.repository_url}:latest"
+  timeout       = 120
+  memory_size   = 512
 
   environment {
     variables = {
-      S3_BUCKET              = aws_s3_bucket.media.id
-      DYNAMO_TABLE           = aws_dynamodb_table.transactions.id
-      X402_FACILITATOR_URL   = var.x402_facilitator_url
-      X402_WALLET_ADDRESS    = var.x402_wallet_address
-      X402_NETWORK           = var.x402_network
-      NODE_ENV               = var.environment
+      S3_BUCKET            = aws_s3_bucket.media.id
+      DYNAMO_TABLE         = aws_dynamodb_table.transactions.id
+      X402_FACILITATOR_URL = var.x402_facilitator_url
+      X402_WALLET_ADDRESS  = var.x402_wallet_address
+      X402_NETWORK         = var.x402_network
+      NODE_ENV             = var.environment
     }
   }
+
+  depends_on = [
+    time_sleep.wait_for_docker,
+    aws_iam_role_policy_attachment.lambda_logs,
+    aws_iam_role_policy.lambda_policy,
+  ]
 
   tags = {
     Project     = var.project_name
@@ -177,7 +193,13 @@ resource "aws_lambda_function" "api" {
   }
 }
 
-# API Gateway
+# CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "lambda_logs" {
+  name              = "/aws/lambda/${var.project_name}-api-${var.environment}"
+  retention_in_days = 14
+}
+
+# API Gateway HTTP API
 resource "aws_apigatewayv2_api" "api" {
   name          = "${var.project_name}-api-${var.environment}"
   protocol_type = "HTTP"
@@ -185,34 +207,37 @@ resource "aws_apigatewayv2_api" "api" {
   cors_configuration {
     allow_origins  = ["*"]
     allow_methods  = ["GET", "POST", "OPTIONS"]
-    allow_headers  = ["Content-Type", "X-Payment", "x402-payment", "X-PAYMENT"]
+    allow_headers  = ["Content-Type", "X-Payment", "x402-payment", "X-PAYMENT", "Authorization"]
     expose_headers = ["X-Payment-Response", "x-payment-response"]
     max_age        = 3600
   }
 }
 
-resource "aws_apigatewayv2_stage" "api" {
-  api_id      = aws_apigatewayv2_api.api.id
-  name        = var.environment
-  auto_deploy = true
-}
-
+# Integración con Lambda
 resource "aws_apigatewayv2_integration" "lambda" {
-  api_id             = aws_apigatewayv2_api.api.id
-  integration_type   = "AWS_PROXY"
-  integration_uri    = aws_lambda_function.api.invoke_arn
-  integration_method = "POST"
+  api_id                 = aws_apigatewayv2_api.api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.api.invoke_arn
+  payload_format_version = "2.0"
 }
 
+# Ruta default (catch-all)
 resource "aws_apigatewayv2_route" "default" {
   api_id    = aws_apigatewayv2_api.api.id
   route_key = "$default"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
-# Permission para API Gateway invocar Lambda
+# Stage de API Gateway
+resource "aws_apigatewayv2_stage" "api" {
+  api_id      = aws_apigatewayv2_api.api.id
+  name        = var.environment
+  auto_deploy = true
+}
+
+# Permisos para que API Gateway invoque Lambda
 resource "aws_lambda_permission" "api_gateway" {
-  statement_id  = "AllowAPIGateway"
+  statement_id  = "AllowAPIGatewayInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.api.function_name
   principal     = "apigateway.amazonaws.com"

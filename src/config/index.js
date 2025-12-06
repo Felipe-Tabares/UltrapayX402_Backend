@@ -1,10 +1,11 @@
 require('dotenv').config();
 
 module.exports = {
-  // MongoDB Configuration
-  mongodb: {
-    uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/ultrapay',
-    dbName: process.env.MONGODB_DB_NAME || 'ultrapay'
+  // AWS Configuration
+  aws: {
+    region: process.env.AWS_REGION || 'us-east-1',
+    s3Bucket: process.env.S3_BUCKET || 'ultrapay-media',
+    dynamoTable: process.env.DYNAMO_TABLE || process.env.DYNAMODB_TABLE || 'ultrapay-transactions'
   },
   // x402 Configuration
   x402: {
