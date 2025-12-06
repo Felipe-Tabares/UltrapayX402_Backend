@@ -1,11 +1,14 @@
 require('dotenv').config();
 
 module.exports = {
-  // AWS Configuration
+  // MongoDB Configuration
+  mongodb: {
+    uri: process.env.MONGODB_URI || ''
+  },
+  // AWS Configuration (opcional - solo para S3)
   aws: {
     region: process.env.AWS_REGION || 'us-east-1',
-    s3Bucket: process.env.S3_BUCKET || 'ultrapay-media',
-    dynamoTable: process.env.DYNAMO_TABLE || process.env.DYNAMODB_TABLE || 'ultrapay-transactions'
+    s3Bucket: process.env.S3_BUCKET || 'ultrapay-media'
   },
   // x402 Configuration
   x402: {
