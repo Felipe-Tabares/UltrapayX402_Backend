@@ -6,16 +6,16 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 
 # Instalar dependencias de producción
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # Copiar código fuente
 COPY src/ ./src/
 
-# Variables de entorno por defecto (Railway las sobreescribe)
+# Variables de entorno por defecto
 ENV NODE_ENV=production
 ENV PORT=3001
 
-# Puerto (Railway lo asigna automáticamente via $PORT)
+# Puerto
 EXPOSE 3001
 
 # Health check
