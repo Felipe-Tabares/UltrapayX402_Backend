@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Environment (NUNCA commitear archivos con secretos)
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Build
+dist/
+dist.zip
+*.zip
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+
+# AWS
+.aws/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Temp
+tmp/
+temp/
+*.tmp
+
+# Secrets (seguridad extra)
+*.pem
+*.key
+*.cert
+secrets/
+credentials/
