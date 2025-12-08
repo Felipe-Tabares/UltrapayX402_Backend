@@ -11,11 +11,14 @@ const app = express();
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 
-// CORS para frontend
+// CORS para frontend - permitir headers de x402
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-payment');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'); 
+  // Headers que el cliente puede enviar (incluyendo los que x402-fetch usa)
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-payment, X-Payment, access-control-expose-headers');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  // Headers que el cliente puede leer de la respuesta 402
+  res.header('Access-Control-Expose-Headers', 'x-payment, X-Payment');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
@@ -139,7 +142,7 @@ module.exports.app = app;
 // Iniciar servidor solo si NO estamos en Lambda
 // Lambda define AWS_LAMBDA_FUNCTION_NAME
 if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
-  const PORT = process.env.PORT || 3001;
+  const PORT = process.env.PORT || 3005;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`UltraPay Backend running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
