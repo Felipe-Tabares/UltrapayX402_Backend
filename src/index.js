@@ -4,67 +4,71 @@ const { generateHandler } = require('./handlers/generate');
 const { healthHandler } = require('./handlers/health');
 const aiService = require('./services/ai');
 const config = require('./config');
+const { paymentMiddleware } = require('x402-express');
 
 const app = express();
 
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 
-// CORS para frontend
+// CORS para frontend - permitir headers de x402
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, X-Payment, x402-payment, X-PAYMENT, Authorization');
+  // Headers que el cliente puede enviar (incluyendo los que x402-fetch usa)
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-payment, X-Payment, access-control-expose-headers');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Expose-Headers', 'X-Payment-Response, x-payment-response');
+  // Headers que el cliente puede leer de la respuesta 402
+  res.header('Access-Control-Expose-Headers', 'x-payment, X-Payment');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
   next();
 });
 
-// Importar y configurar x402-express de forma dinamica (ES Module)
-async function setupX402Middleware() {
-  try {
-    // Importar x402-express dinamicamente
-    const { paymentMiddleware } = await import('x402-express');
-
-    // Obtener proveedores para construir las rutas con precios
-    const providers = aiService.getAvailableProviders();
-
-    // Construir configuracion de rutas para x402
-    const routeConfigs = {};
-
-    // Precio minimo como base
-    const minImagePrice = Math.min(...providers.filter(p => p.type === 'image').map(p => p.price));
-    const minVideoPrice = Math.min(...providers.filter(p => p.type === 'video').map(p => p.price));
-    const minPrice = Math.min(minImagePrice, minVideoPrice);
-
-    // Configurar ruta /generate con precio base
-    routeConfigs['POST /generate'] = {
-      price: `$${minPrice}`,
-      network: config.x402.network,
-      config: {
-        description: 'UltraPayx402 - AI Image/Video Generation',
-        maxTimeoutSeconds: 120
-      }
-    };
-
-    // Aplicar middleware x402
-    app.use(paymentMiddleware(
-      config.x402.walletAddress,
-      routeConfigs,
-      { url: config.x402.facilitatorUrl }
-    ));
-
-    console.log('x402 middleware configured successfully');
-    console.log(`Wallet: ${config.x402.walletAddress}`);
-    console.log(`Facilitator: ${config.x402.facilitatorUrl}`);
-    console.log(`Network: ${config.x402.network}`);
-
-  } catch (error) {
-    console.error('Error setting up x402 middleware:', error.message);
-    console.log('Running without x402 middleware (payment verification will be simulated)');
+// Middleware para logging de headers x-payment (debug)
+app.use((req, res, next) => {
+  if (req.headers['x-payment']) {
   }
+  next();
+});
+
+// Configurar x402 middleware de forma sincrona
+try {
+  // Obtener proveedores para construir las rutas con precios
+  const providers = aiService.getAvailableProviders();
+
+  // Construir configuracion de rutas para x402
+  const routeConfigs = {};
+
+  // Precio minimo como base
+  const minImagePrice = Math.min(...providers.filter(p => p.type === 'image').map(p => p.price));
+  const minVideoPrice = Math.min(...providers.filter(p => p.type === 'video').map(p => p.price));
+  const minPrice = Math.min(minImagePrice, minVideoPrice);
+
+  // Configurar ruta /generate con precio base
+  routeConfigs['POST /generate'] = {
+    price: `$${minPrice}`, // Precio en USDC (debe incluir el símbolo $)
+    network: config.x402.network
+  };
+
+  // Aplicar middleware x402 ANTES de definir las rutas
+  app.use(paymentMiddleware(
+    `${config.x402.walletAddress}`,
+    routeConfigs,
+    {
+      url: config.x402.facilitatorUrl
+    }
+  ));
+  
+  console.log('x402 middleware configured successfully');
+  console.log(`Wallet: ${config.x402.walletAddress}`);
+  console.log(`Facilitator: ${config.x402.facilitatorUrl}`);
+  console.log(`Network: ${config.x402.network}`);
+  console.log(`Min Price: ${minPrice} USDC`);
+
+} catch (error) {
+  console.error('Error setting up x402 middleware:', error.message);
+  console.log('Running without x402 middleware (payment verification will be simulated)');
 }
 
 // Routes publicas (sin pago)
@@ -112,8 +116,22 @@ app.get('/pricing', (req, res) => {
 // Ruta protegida con x402
 app.post('/generate', generateHandler);
 
-// Inicializar x402 middleware
-setupX402Middleware();
+// Middleware de manejo de errores x402
+app.use((err, req, res, next) => {
+  if (err) { 
+    // Si el error ya fue manejado por x402, no hacer nada más
+    if (res.headersSent) {
+      return;
+    }
+    
+    res.status(402).json({
+      error: 'Payment verification failed',
+      message: err.message
+    });
+  } else {
+    next();
+  }
+});
 
 // Export para Lambda (si se usa en AWS)
 module.exports.handler = serverless(app);
@@ -124,7 +142,7 @@ module.exports.app = app;
 // Iniciar servidor solo si NO estamos en Lambda
 // Lambda define AWS_LAMBDA_FUNCTION_NAME
 if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
-  const PORT = process.env.PORT || 3001;
+  const PORT = process.env.PORT || 3005;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`UltraPay Backend running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
