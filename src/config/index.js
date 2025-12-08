@@ -21,6 +21,10 @@ module.exports = {
     port: process.env.PORT || 3001,
     nodeEnv: process.env.NODE_ENV || 'development'
   },
+  // AI Provider API Keys
+  apiKeys: {
+    google: process.env.GOOGLE_API_KEY || ''
+  },
   // Precios por modelo en USD (USDC)
   ai: {
     providers: {
@@ -29,35 +33,8 @@ module.exports = {
         type: 'image',
         price: 0.10,
         description: 'Rapido y economico',
-        model: 'nanobanana-v1'
-      },
-      sd35: {
-        name: 'SD3.5',
-        type: 'image',
-        price: 0.15,
-        description: 'Alta calidad, versatil',
-        model: 'stable-diffusion-3.5'
-      },
-      midjourney: {
-        name: 'Midjourney',
-        type: 'image',
-        price: 0.20,
-        description: 'Artistico premium',
-        model: 'mj-v6'
-      },
-      veo3: {
-        name: 'Veo 3',
-        type: 'video',
-        price: 0.85,
-        description: 'Videos realistas',
-        model: 'veo-3'
-      },
-      runway: {
-        name: 'Runway Gen-3',
-        type: 'video',
-        price: 1.20,
-        description: 'Cinematografico',
-        model: 'gen-3'
+        model: 'gemini-2.0-flash-exp',
+        backend: 'google'
       }
     },
     defaultProvider: 'nanobanana'
