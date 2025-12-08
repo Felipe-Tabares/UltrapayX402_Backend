@@ -12,7 +12,7 @@ module.exports = {
   },
   // x402 Configuration
   x402: {
-    facilitatorUrl: process.env.X402_FACILITATOR_URL || 'https://facilitator.ultravioletadao.xyz/',
+    facilitatorUrl: process.env.X402_FACILITATOR_URL || 'https://facilitator.ultravioletadao.xyz',
     walletAddress: process.env.X402_WALLET_ADDRESS || '0x34033041a5944B8F10f8E4D8496Bfb84f1A293A8',
     network: process.env.X402_NETWORK || 'base-sepolia'
   },
