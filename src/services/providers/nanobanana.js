@@ -28,36 +28,26 @@ async function generate(prompt) {
   console.log(`[NanoBanana] Generating image: "${prompt.substring(0, 50)}..."`);
 
   try {
-    // Use Gemini 2.0 Flash for image generation (Nano Banana)
-    const response = await client.models.generateContent({
-      model: 'gemini-2.5-flash-image-preview',
-      contents: {
-        parts: [
-          {
-            text: prompt
-          }
-        ]
-      
-    },
+    // Use Imagen 4.0 for image generation
+    const response = await client.models.generateImages({
+      model: 'imagen-4.0-generate-001',
+      prompt: prompt,
       config: {
-        responseModalities: ['IMAGE']
+        numberOfImages: 1,
+        outputMimeType: 'image/jpeg',
+        aspectRatio: '1:1'
       }
     });
 
-    // Find the image part in the response
-    const parts = response.candidates?.[0]?.content?.parts || [];
-    let imageData = null;
+    // Imagen 4.0 returns generatedImages array
+    const generatedImages = response.generatedImages || [];
 
-    for (const part of parts) {
-      if (part.inlineData) {
-        imageData = part.inlineData.data;
-        break;
-      }
-    }
-
-    if (!imageData) {
+    if (!generatedImages.length || !generatedImages[0].image?.imageBytes) {
       throw new Error('No image generated in response');
     }
+
+    // Get base64 image data
+    const imageData = generatedImages[0].image.imageBytes;
 
     // Convert base64 to Buffer
     const data = Buffer.from(imageData, 'base64');
@@ -68,9 +58,9 @@ async function generate(prompt) {
       data,
       metadata: {
         provider: 'nanobanana',
-        model: 'gemini-2.0-flash-exp',
+        model: 'imagen-4.0-generate-001',
         prompt,
-        mimeType: 'image/png'
+        mimeType: 'image/jpeg'
       }
     };
 
