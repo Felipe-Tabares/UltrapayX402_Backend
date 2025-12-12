@@ -14,12 +14,19 @@ const storageService = require('../services/storage');
  */
 async function generateHandler(req, res) {
   try {
-    const { prompt, type, provider } = req.body;
+    const { prompt, type, provider, walletAddress } = req.body;
 
     // Validaciones básicas
     if (!prompt || !type) {
       return res.status(400).json({
         error: 'Missing required fields: prompt, type'
+      });
+    }
+
+    // Validar walletAddress
+    if (!walletAddress) {
+      return res.status(400).json({
+        error: 'Missing required field: walletAddress'
       });
     }
 
@@ -77,16 +84,18 @@ async function generateHandler(req, res) {
       provider: selectedProvider
     });
 
-    // Subir a S3 y obtener URL
+    // Subir a S3 y obtener URL (o base64 data URL si S3 no está configurado)
     const mediaUrl = await storageService.upload({
       data: result.data,
       type,
-      transactionId
+      transactionId,
+      mimeType: result.metadata?.mimeType
     });
 
-    // Registrar transacción
+    // Registrar transacción con walletAddress
     await storageService.saveTransaction({
       transactionId,
+      walletAddress: walletAddress.toLowerCase(), // Normalizar
       prompt: sanitizedPrompt,
       type,
       provider: selectedProvider,

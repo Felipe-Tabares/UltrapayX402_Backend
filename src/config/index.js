@@ -23,18 +23,20 @@ module.exports = {
   },
   // AI Provider API Keys
   apiKeys: {
-    google: process.env.GOOGLE_API_KEY || ''
+    google: process.env.GOOGLE_API_KEY || '',
+    huggingface: process.env.HF_TOKEN || ''
   },
   // Precios por modelo en USD (USDC)
   ai: {
+    huggingfaceModel: process.env.HF_MODEL || 'black-forest-labs/FLUX.1-dev',
     providers: {
       nanobanana: {
         name: 'NanoBanana',
         type: 'image',
         price: 0.10,
-        description: 'Rapido y economico',
-        model: 'gemini-2.0-flash-exp',
-        backend: 'google'
+        description: 'FLUX.1 - Alta calidad',
+        model: 'black-forest-labs/FLUX.1-dev',
+        backend: 'huggingface'
       }
     },
     defaultProvider: 'nanobanana'

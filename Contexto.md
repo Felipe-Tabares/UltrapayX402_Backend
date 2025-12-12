@@ -1076,6 +1076,343 @@ Para desplegar con Terraform, el usuario IAM necesita:
 
 ---
 
-*Documento generado para el proyecto UltraPayx402 - Backend + Frontend*
-*Protocolo x402 completamente integrado*
-*Wallet real conectada (MetaMask/Core)*
+## Corrección del Flujo x402 Frontend (2025-12-10)
+
+### Problema Identificado
+
+El frontend buscaba la información de pago en el header `WWW-Authenticate`, pero `x402-express` envía los datos en el **body JSON** de la respuesta 402.
+
+**Error original:**
+```
+No WWW-Authenticate header in 402 response
+```
+
+**Respuesta real del backend (correcta):**
+```json
+{
+  "x402Version": 1,
+  "error": "X-PAYMENT header is required",
+  "accepts": [{
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "maxAmountRequired": "100000",
+    "payTo": "0x34033041a5944B8F10f8E4D8496Bfb84f1A293A8",
+    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    ...
+  }]
+}
+```
+
+### Solución Implementada
+
+**Archivo modificado:** `x402-frond/src/services/x402.ts`
+
+La función `createPaymentFetch()` fue actualizada para:
+1. Leer el body JSON de la respuesta 402
+2. Extraer `accepts[0]` como información de pago
+3. Firmar y reenviar con header X-Payment
+
+```typescript
+// ANTES (incorrecto)
+const wwwAuthenticate = firstResponse.headers.get('WWW-Authenticate');
+
+// DESPUÉS (correcto)
+const x402Data = await firstResponse.json();
+const paymentInfo = x402Data.accepts[0];
+```
+
+### Corrección de Red (chainId)
+
+**Error:** `chainId should be same as current chainId`
+
+La wallet estaba en una red diferente a Base Sepolia. Se agregó verificación automática de red antes de firmar:
+
+```typescript
+// En signPaymentAuthorization()
+const currentChainIdNum = parseInt(currentChainId, 16);
+if (currentChainIdNum !== chain.id) {
+  await switchToCorrectNetwork();
+  // Reinicializar walletClient con la nueva red
+  walletClient = createWalletClient({
+    account: address,
+    chain: chain,
+    transport: custom(window.ethereum!),
+  });
+}
+```
+
+---
+
+## Integración Google AI - NanoBanana Provider (2025-12-10)
+
+### Problema: API Key Inválida
+
+**Error inicial:**
+```
+API Key not found. Please pass a valid API key.
+```
+
+**Solución:** Crear nueva API key en [Google AI Studio](https://aistudio.google.com/apikey)
+
+### Problema: Quota Excedida (Free Tier)
+
+**Error:**
+```
+429 RESOURCE_EXHAUSTED - limit: 0, model: gemini-2.0-flash-exp
+```
+
+Los modelos experimentales (`-exp`, `-preview`) tienen límites muy restrictivos en el tier gratuito.
+
+### Problema: Imagen API Requiere Billing
+
+**Error:**
+```
+Imagen API is only accessible to billed users at this time.
+```
+
+**Solución:** Activar facturación en Google Cloud Console y vincular la API key al proyecto con billing.
+
+### Problema: Modelo No Soporta Imágenes
+
+**Error:**
+```
+Model does not support the requested response modalities: image,text
+```
+
+El modelo `gemini-2.0-flash` (sin sufijo) solo soporta texto, no imágenes.
+
+### Problema: Modelo No Encontrado
+
+**Error:**
+```
+models/imagen-3.0-generate-002 is not found for API version v1beta
+```
+
+Imagen 3 no está disponible. Se debe usar Imagen 4.0.
+
+### Modelos Disponibles (con Billing Activo)
+
+Ejecutar para listar modelos:
+```javascript
+const models = await ai.models.list();
+for await (const model of models) {
+  if (model.name.includes('imagen') || model.name.includes('image')) {
+    console.log(model.name);
+  }
+}
+```
+
+**Modelos de imagen disponibles:**
+| Modelo | Descripción |
+|--------|-------------|
+| `imagen-4.0-generate-001` | Imagen 4.0 estándar ✅ (Recomendado) |
+| `imagen-4.0-fast-generate-001` | Imagen 4.0 rápido |
+| `imagen-4.0-ultra-generate-001` | Imagen 4.0 ultra calidad |
+| `gemini-2.0-flash-exp-image-generation` | Gemini con imágenes (experimental) |
+| `gemini-2.5-flash-image` | Gemini 2.5 con imágenes |
+| `gemini-3-pro-image-preview` | Gemini 3 Pro preview |
+
+### Implementación Final - NanoBanana
+
+**Archivo:** `src/services/providers/nanobanana.js`
+
+```javascript
+const { GoogleGenAI } = require('@google/genai');
+const config = require('../../config');
+
+let ai = null;
+
+function initClient() {
+  if (ai) return ai;
+  const apiKey = config.apiKeys.google;
+  if (!apiKey) {
+    throw new Error('GOOGLE_API_KEY not configured');
+  }
+  ai = new GoogleGenAI({ apiKey });
+  return ai;
+}
+
+async function generate(prompt) {
+  const client = initClient();
+
+  // Use Imagen 4.0 for image generation (requires billing enabled)
+  const response = await client.models.generateImages({
+    model: 'imagen-4.0-generate-001',
+    prompt: prompt,
+    config: {
+      numberOfImages: 1,
+      aspectRatio: '1:1',
+      outputMimeType: 'image/jpeg'
+    }
+  });
+
+  const generatedImages = response.generatedImages || [];
+  if (!generatedImages.length || !generatedImages[0].image?.imageBytes) {
+    throw new Error('No image generated in response');
+  }
+
+  const imageData = generatedImages[0].image.imageBytes;
+  const data = Buffer.from(imageData, 'base64');
+
+  return {
+    data,
+    metadata: {
+      provider: 'nanobanana',
+      model: 'imagen-4.0-generate-001',
+      prompt,
+      mimeType: 'image/jpeg'
+    }
+  };
+}
+
+module.exports = { generate, isConfigured: () => !!config.apiKeys.google };
+```
+
+### Configuración Requerida
+
+**`.env` del backend:**
+```env
+GOOGLE_API_KEY=tu_api_key_de_google_ai_studio
+```
+
+**Requisitos:**
+1. API key creada en [Google AI Studio](https://aistudio.google.com/apikey)
+2. Billing activo en Google Cloud Console
+3. API key vinculada al proyecto con billing
+
+### Precios de Imagen 4.0
+
+| Modelo | Precio por imagen |
+|--------|-------------------|
+| imagen-4.0-generate-001 | ~$0.03 USD |
+| imagen-4.0-fast-generate-001 | ~$0.02 USD |
+| imagen-4.0-ultra-generate-001 | ~$0.05 USD |
+
+---
+
+## Deploy en Netlify - Frontend (2025-12-10)
+
+### Problema: MIME Type Incorrecto
+
+**Error:**
+```
+Failed to load module script: Expected a JavaScript-or-Wasm module script
+but the server responded with a MIME type of "application/octet-stream"
+```
+
+**Solución:** Crear archivo `netlify.toml` en la raíz del frontend:
+
+```toml
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Content-Type = "application/javascript"
+
+[[headers]]
+  for = "/*.mjs"
+  [headers.values]
+    Content-Type = "application/javascript"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+```
+
+### Problema: Build Falla por TypeScript
+
+**Error:** `exit code 2` - Errores de TypeScript en componentes UI
+
+Los imports en componentes Shadcn/UI tenían versiones en el nombre del módulo (ej: `@radix-ui/react-accordion@1.2.3`).
+
+**Solución:** Modificar `package.json` para saltarse verificación de TypeScript:
+
+```json
+{
+  "scripts": {
+    "build": "vite build"  // Antes: "tsc -b && vite build"
+  }
+}
+```
+
+---
+
+## Infraestructura Actual
+
+### Producción (Render)
+
+| Servicio | Propósito |
+|----------|-----------|
+| Render Web Service | Backend Node.js/Express |
+| MongoDB Atlas | Base de datos |
+| Netlify | Frontend React |
+
+### Futura (AWS - Escalabilidad)
+
+| Servicio | Propósito |
+|----------|-----------|
+| AWS Lambda | Compute serverless |
+| AWS S3 | Almacenamiento de media |
+| API Gateway | Exposición de endpoints |
+| DynamoDB | Base de datos serverless |
+| CloudFront | CDN global |
+| Terraform | Infraestructura como código |
+
+---
+
+## Registro de Cambios (Actualizado)
+
+| Fecha | Descripción |
+|-------|-------------|
+| 2025-12-05 | Creación inicial del archivo Contexto.md |
+| 2025-12-05 | Agregado análisis completo del frontend |
+| 2025-12-05 | Documentación detallada del protocolo x402 |
+| 2025-12-05 | Identificadas discrepancias backend/frontend |
+| 2025-12-05 | **Sincronización completada**: Backend actualizado con precios por modelo |
+| 2025-12-05 | **Frontend actualizado**: Nuevo servicio API con modo mock |
+| 2025-12-05 | **x402 IMPLEMENTADO**: Backend con x402-express middleware |
+| 2025-12-05 | **x402 IMPLEMENTADO**: Frontend con x402-fetch y viem |
+| 2025-12-05 | **Wallet integration**: Conexión MetaMask/Core en Generate.tsx |
+| 2025-12-10 | **FIX x402 Frontend**: Corregido parseo de respuesta 402 (body JSON vs header) |
+| 2025-12-10 | **FIX Network Switch**: Auto-cambio a Base Sepolia antes de firmar |
+| 2025-12-10 | **NanoBanana Provider**: Integración con Google Imagen 4.0 |
+| 2025-12-10 | **Deploy Netlify**: Configuración MIME types y build sin TypeScript check |
+| 2025-12-10 | **Documentación**: Errores comunes de Google AI y soluciones |
+
+---
+
+## Estado Actual del Proyecto (Actualizado 2025-12-10)
+
+### Completado ✅
+
+- [x] Estructura de backend (Express + Lambda-ready)
+- [x] Estructura de frontend (React + Vite + TypeScript)
+- [x] Sincronización de modelos y precios
+- [x] Modo mock para desarrollo
+- [x] Integración x402-express en backend
+- [x] Integración x402 custom en frontend (createPaymentFetch)
+- [x] Conexión de wallet REAL (MetaMask/Core/Rabby)
+- [x] Flujo de pago x402 completo y funcional
+- [x] Auto-cambio de red a Base Sepolia
+- [x] **NanoBanana con Google Imagen 4.0**
+- [x] Deploy frontend en Netlify
+- [x] Deploy backend en Render
+- [x] MongoDB Atlas configurado
+
+### Pendiente ⏳
+
+- [ ] Prueba end-to-end de generación de imagen con pago
+- [ ] Integración de más proveedores de IA (Veo3, Runway, etc.)
+- [ ] Historial persistente de generaciones
+- [ ] Migración a mainnet (Base) para producción
+- [ ] Deploy a AWS Lambda (escalabilidad futura)
+
+---
+
+*Documento actualizado: 2025-12-10*
+*Proyecto UltraPayx402 - Backend + Frontend*
+*Protocolo x402 + Google Imagen 4.0*

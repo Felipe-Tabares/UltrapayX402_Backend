@@ -1,68 +1,75 @@
-const { GoogleGenAI } = require('@google/genai');
 const config = require('../../config');
 
-let ai = null;
-
-// Initialize Google GenAI client
-function initClient() {
-  if (ai) return ai;
-
-  const apiKey = config.apiKeys.google;
-  if (!apiKey) {
-    throw new Error('GOOGLE_API_KEY not configured');
-  }
-
-  ai = new GoogleGenAI({ apiKey });
-  console.log('[NanoBanana] Google GenAI client initialized');
-  return ai;
-}
+// Hugging Face Configuration (new router endpoint)
+const HF_API_URL = 'https://router.huggingface.co/hf-inference/models';
+const DEFAULT_MODEL = 'black-forest-labs/FLUX.1-dev';
 
 /**
- * Generate image using Gemini (Nano Banana)
+ * Generate image using Hugging Face Inference API
  * @param {string} prompt - The image prompt
  * @returns {Object} - { data: Buffer, metadata: Object }
  */
 async function generate(prompt) {
-  const client = initClient();
+  const hfToken = config.apiKeys.huggingface;
 
-  console.log(`[NanoBanana] Generating image: "${prompt.substring(0, 50)}..."`);
+  if (!hfToken) {
+    throw new Error('HF_TOKEN not configured');
+  }
+
+  const model = config.ai?.huggingfaceModel || DEFAULT_MODEL;
+  const apiUrl = `${HF_API_URL}/${model}`;
+
+  console.log(`[NanoBanana] Generating image with Hugging Face: "${prompt.substring(0, 50)}..."`);
+  console.log(`[NanoBanana] Model: ${model}`);
 
   try {
-    // Use Imagen 4.0 for image generation
-    const response = await client.models.generateImages({
-      model: 'imagen-4.0-generate-001',
-      prompt: prompt,
-      config: {
-        numberOfImages: 1,
-        outputMimeType: 'image/jpeg',
-        aspectRatio: '1:1'
-      }
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${hfToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        inputs: prompt,
+        parameters: {
+          width: 1024,
+          height: 1024,
+          guidance_scale: 7.5,
+          num_inference_steps: 30
+        }
+      })
     });
 
-    // Imagen 4.0 returns generatedImages array
-    const generatedImages = response.generatedImages || [];
+    // Check if response is an image
+    const contentType = response.headers.get('content-type') || '';
 
-    if (!generatedImages.length || !generatedImages[0].image?.imageBytes) {
-      throw new Error('No image generated in response');
+    if (contentType.startsWith('image/')) {
+      // Success - response is image bytes
+      const arrayBuffer = await response.arrayBuffer();
+      const data = Buffer.from(arrayBuffer);
+
+      console.log(`[NanoBanana] Success! Generated ${data.length} bytes (${contentType})`);
+
+      return {
+        data,
+        metadata: {
+          provider: 'nanobanana',
+          model: model,
+          prompt,
+          mimeType: contentType.split(';')[0] // 'image/png' or 'image/jpeg'
+        }
+      };
     }
 
-    // Get base64 image data
-    const imageData = generatedImages[0].image.imageBytes;
+    // Error response - parse JSON
+    const errorData = await response.json();
 
-    // Convert base64 to Buffer
-    const data = Buffer.from(imageData, 'base64');
+    // Handle model loading (503)
+    if (response.status === 503 && errorData.estimated_time) {
+      throw new Error(`Model is loading. Estimated time: ${Math.ceil(errorData.estimated_time)} seconds. Please retry.`);
+    }
 
-    console.log(`[NanoBanana] Success! Generated ${data.length} bytes`);
-
-    return {
-      data,
-      metadata: {
-        provider: 'nanobanana',
-        model: 'imagen-4.0-generate-001',
-        prompt,
-        mimeType: 'image/jpeg'
-      }
-    };
+    throw new Error(errorData.error || `HTTP ${response.status}: Unknown error`);
 
   } catch (error) {
     console.error('[NanoBanana] Error:', error.message);
@@ -74,7 +81,7 @@ async function generate(prompt) {
  * Check if the provider is configured
  */
 function isConfigured() {
-  return !!config.apiKeys.google;
+  return !!config.apiKeys.huggingface;
 }
 
 module.exports = {
