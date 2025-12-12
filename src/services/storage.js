@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
-const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const config = require('../config');
 
 // ============ MongoDB Setup ============
@@ -10,6 +9,7 @@ let isMongoConnected = false;
 // Transaction Schema
 const transactionSchema = new mongoose.Schema({
   transactionId: { type: String, required: true, unique: true, index: true },
+  walletAddress: { type: String, required: true, index: true }, // Wallet del usuario
   prompt: { type: String, required: true },
   type: { type: String, enum: ['image', 'video'], required: true },
   provider: { type: String, required: true },
@@ -17,6 +17,7 @@ const transactionSchema = new mongoose.Schema({
   price: { type: Number, required: true },
   paymentHash: { type: String, default: '' },
   mediaUrl: { type: String },
+  isFavorite: { type: Boolean, default: false }, // Marcado como favorito
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -64,19 +65,20 @@ const mockTransactions = new Map();
 // ============ Storage Functions ============
 
 /**
- * Sube contenido generado a S3
- * @param {Object} params - { data, type, transactionId }
- * @returns {string} - URL presignada del contenido
+ * Sube contenido generado a S3 o devuelve como base64 data URL
+ * @param {Object} params - { data, type, transactionId, mimeType }
+ * @returns {string} - URL publica del contenido o data URL
  */
-async function upload({ data, type, transactionId }) {
+async function upload({ data, type, transactionId, mimeType }) {
   const extension = type === 'video' ? 'mp4' : 'png';
-  const contentType = type === 'video' ? 'video/mp4' : 'image/png';
+  const contentType = mimeType || (type === 'video' ? 'video/mp4' : 'image/png');
   const key = `generated/${transactionId}.${extension}`;
 
-  // Mock storage si S3 no está configurado
+  // Si S3 no está configurado, devolver como base64 data URL
   if (!isAWSConfigured || !s3Client) {
-    console.log(`[Storage] Mock upload: ${key}`);
-    return `https://mock-storage.ultrapay.local/${key}`;
+    console.log(`[Storage] Converting to base64 data URL: ${key}`);
+    const base64 = data.toString('base64');
+    return `data:${contentType};base64,${base64}`;
   }
 
   const command = new PutObjectCommand({
@@ -88,15 +90,11 @@ async function upload({ data, type, transactionId }) {
 
   await s3Client.send(command);
 
-  // Generar URL presignada (válida por 1 hora)
-  const getCommand = new GetObjectCommand({
-    Bucket: config.aws.s3Bucket,
-    Key: key
-  });
+  // Retornar URL publica (el bucket debe tener acceso publico configurado)
+  const publicUrl = `https://${config.aws.s3Bucket}.s3.${config.aws.region}.amazonaws.com/${key}`;
 
-  const presignedUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 3600 });
-
-  return presignedUrl;
+  console.log(`[Storage] Uploaded to S3: ${publicUrl}`);
+  return publicUrl;
 }
 
 /**
@@ -118,6 +116,7 @@ async function saveTransaction(transaction) {
 
   const doc = new Transaction({
     transactionId: transaction.transactionId,
+    walletAddress: transaction.walletAddress?.toLowerCase() || '', // Normalizar a lowercase
     prompt: transaction.prompt,
     type: transaction.type,
     provider: transaction.provider,
@@ -129,7 +128,7 @@ async function saveTransaction(transaction) {
   });
 
   await doc.save();
-  console.log(`[Storage] Transaction saved: ${transaction.transactionId}`);
+  console.log(`[Storage] Transaction saved: ${transaction.transactionId} for wallet: ${transaction.walletAddress}`);
 }
 
 /**
@@ -160,7 +159,80 @@ async function getTransaction(transactionId) {
 }
 
 /**
- * Obtiene todas las transacciones (para historial)
+ * Obtiene todas las transacciones de una wallet específica (para historial personal)
+ * @param {string} walletAddress - Dirección de la wallet
+ * @param {number} limit - Límite de resultados
+ */
+async function getTransactionsByWallet(walletAddress, limit = 50) {
+  const connected = await connectMongoDB();
+  const normalizedWallet = walletAddress?.toLowerCase() || '';
+
+  if (!connected) {
+    // Filtrar mock transactions por wallet
+    return Array.from(mockTransactions.values())
+      .filter(tx => tx.walletAddress?.toLowerCase() === normalizedWallet)
+      .slice(0, limit);
+  }
+
+  const docs = await Transaction.find({ walletAddress: normalizedWallet })
+    .sort({ createdAt: -1 })
+    .limit(limit);
+
+  return docs.map(doc => ({
+    transactionId: doc.transactionId,
+    walletAddress: doc.walletAddress,
+    prompt: doc.prompt,
+    type: doc.type,
+    provider: doc.provider,
+    providerName: doc.providerName,
+    price: doc.price,
+    paymentHash: doc.paymentHash,
+    mediaUrl: doc.mediaUrl,
+    isFavorite: doc.isFavorite || false,
+    createdAt: doc.createdAt.toISOString()
+  }));
+}
+
+/**
+ * Toggle favorito de una transaccion
+ * @param {string} transactionId - ID de la transaccion
+ * @param {string} walletAddress - Wallet del usuario (para verificacion)
+ * @returns {Object} - { success, isFavorite }
+ */
+async function toggleFavorite(transactionId, walletAddress) {
+  const connected = await connectMongoDB();
+  const normalizedWallet = walletAddress?.toLowerCase() || '';
+
+  if (!connected) {
+    // Fallback a mock storage
+    const tx = mockTransactions.get(transactionId);
+    if (tx && tx.walletAddress?.toLowerCase() === normalizedWallet) {
+      tx.isFavorite = !tx.isFavorite;
+      return { success: true, isFavorite: tx.isFavorite };
+    }
+    return { success: false, error: 'Transaction not found' };
+  }
+
+  // Buscar la transaccion y verificar que pertenece a la wallet
+  const doc = await Transaction.findOne({
+    transactionId,
+    walletAddress: normalizedWallet
+  });
+
+  if (!doc) {
+    return { success: false, error: 'Transaction not found or access denied' };
+  }
+
+  // Toggle el valor de isFavorite
+  doc.isFavorite = !doc.isFavorite;
+  await doc.save();
+
+  console.log(`[Storage] Toggle favorite: ${transactionId} -> ${doc.isFavorite}`);
+  return { success: true, isFavorite: doc.isFavorite };
+}
+
+/**
+ * Obtiene todas las transacciones (admin - sin filtro de wallet)
  */
 async function getAllTransactions(limit = 50) {
   const connected = await connectMongoDB();
@@ -175,6 +247,7 @@ async function getAllTransactions(limit = 50) {
 
   return docs.map(doc => ({
     transactionId: doc.transactionId,
+    walletAddress: doc.walletAddress,
     prompt: doc.prompt,
     type: doc.type,
     provider: doc.provider,
@@ -190,6 +263,8 @@ module.exports = {
   upload,
   saveTransaction,
   getTransaction,
+  getTransactionsByWallet,
   getAllTransactions,
+  toggleFavorite,
   connectMongoDB
 };
